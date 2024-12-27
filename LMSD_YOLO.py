@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Depthwise Separable Convolution
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
         super(DepthwiseSeparableConv, self).__init__()
@@ -16,7 +15,6 @@ class DepthwiseSeparableConv(nn.Module):
         print(f"DepthwiseSeparableConv: Output shape = {x.shape}")
         return x
 
-# ACON-C Activation Function
 class AconC(nn.Module):
     def __init__(self, width):
         super(AconC, self).__init__()
@@ -31,7 +29,6 @@ class AconC(nn.Module):
         print(f"ACON-C: Output shape = {output.shape}")
         return output
 
-# DBA Module
 class DBA(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super(DBA, self).__init__()
@@ -47,23 +44,37 @@ class DBA(nn.Module):
         print(f"DBA: Output shape = {x.shape}")
         return x
 
-# STEM Module
 class STEM(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, input_channels, output_channels):
         super(STEM, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.aconc = AconC(out_channels)
+        self.dsc1 = DepthwiseSeparableConv(input_channels, input_channels, kernel_size=3, stride=2, padding=1)
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dsc2 = DepthwiseSeparableConv(input_channels, input_channels, kernel_size=3, stride=2, padding=1)
+        self.conv1x1 = nn.Conv2d(input_channels, input_channels, kernel_size=1, stride=1)
+        self.bn_aconc = nn.Sequential(
+            nn.BatchNorm2d(input_channels),
+            AconC(input_channels)
+        )
+        self.concat_conv = nn.Conv2d(input_channels * 2, output_channels, kernel_size=1, stride=1)
 
     def forward(self, x):
         print(f"STEM: Input shape = {x.shape}")
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.aconc(x)
-        print(f"STEM: Output shape = {x.shape}")
-        return x
+        path1 = self.dsc1(x)
+        print(f"STEM: After DSC1, shape = {path1.shape}")
+        path1_new = self.conv1x1(path1)
+        print(f"STEM: After Conv1x1, shape = {path1_new.shape}")
+        path1_new = self.dsc2(path1_new)
+        print(f"STEM: After DSC2, shape = {path1_new.shape}")
+        path1_new = self.bn_aconc(path1_new)
+        print(f"STEM: After BatchNorm + ACON-C, shape = {path1_new.shape}")
+        path2 = self.maxpool(path1)
+        print(f"STEM: After MaxPool, shape = {path2.shape}")
+        concatenated = torch.cat([path1_new, path2], dim=1)
+        print(f"STEM: After concatenation, shape = {concatenated.shape}")
+        output = self.concat_conv(concatenated)
+        print(f"STEM: Final output shape = {output.shape}")
+        return output
 
-# DSA Module
 class DSA(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DSA, self).__init__()
@@ -77,13 +88,12 @@ class DSA(nn.Module):
         print(f"DSA: Output shape = {x.shape}")
         return x
 
-# DWASFF Module (Updated)
 class DWASFF(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DWASFF, self).__init__()
         self.dba = DBA(in_channels, out_channels)
-        # No upsampling here
-        self.upsample = nn.Identity()  # Remove upsampling
+
+        self.upsample = nn.Identity()  
 
     def forward(self, x):
         print(f"DWASFF: Input shape = {x.shape}")
@@ -92,13 +102,12 @@ class DWASFF(nn.Module):
         print(f"DWASFF: Output shape = {x.shape}")
         return x
 
-# DBAUpSample Module (Updated)
 class DBAUpSample(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DBAUpSample, self).__init__()
         self.dba = DBA(in_channels, out_channels)
-        # No upsampling here
-        self.upsample = nn.Identity()  # Remove upsampling
+
+        self.upsample = nn.Identity()  
 
     def forward(self, x):
         print(f"DBAUpSample: Input shape = {x.shape}")
@@ -107,11 +116,11 @@ class DBAUpSample(nn.Module):
         print(f"DBAUpSample: Output shape = {x.shape}")
         return x
 
-# Backbone Network
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        self.stem = STEM(in_channels=3, out_channels=16)
+
+        self.stem = STEM(input_channels=3, output_channels=16)
         self.dba_blocks = nn.Sequential(*[DBA(16, 16) for _ in range(5)])
 
     def forward(self, x):
@@ -124,7 +133,6 @@ class Backbone(nn.Module):
         print(f"Backbone: Final output shape = {x.shape}")
         return x
 
-# Neck Network
 class Neck(nn.Module):
     def __init__(self):
         super(Neck, self).__init__()
@@ -161,12 +169,11 @@ class Neck(nn.Module):
         print(f"Neck: Final output shape = {x7.shape}")
         return x7
 
-# Prediction Module (Updated)
 class Prediction(nn.Module):
     def __init__(self):
         super(Prediction, self).__init__()
         self.conv = nn.Conv2d(512, 7, kernel_size=1, stride=1, padding=0)
-        self.nms = nn.MaxPool2d(kernel_size=2, stride=2)  # Downsample to reduce spatial dimensions
+        self.nms = nn.MaxPool2d(kernel_size=2, stride=2)  
 
     def forward(self, x):
         print("\nPrediction: Starting forward pass...")
@@ -178,7 +185,6 @@ class Prediction(nn.Module):
         print(f"Prediction: Final output shape = {x.shape}")
         return x
 
-# Complete Network
 class CompleteNetwork(nn.Module):
     def __init__(self):
         super(CompleteNetwork, self).__init__()
@@ -197,15 +203,11 @@ class CompleteNetwork(nn.Module):
         print("\nCompleteNetwork: Forward pass completed.")
         return x
 
-# Example usage
 if __name__ == "__main__":
-    # Create an instance of the complete network
     model = CompleteNetwork()
 
-    # Dummy input tensor
-    x = torch.randn(1, 3, 640, 640)  # Batch size=1, Channels=3, Height=640, Width=640
+    x = torch.randn(1, 3, 640, 640)  
     print(f"\nInput shape: {x.shape}")
 
-    # Forward pass
     output = model(x)
     print(f"\nFinal output shape: {output.shape}")
