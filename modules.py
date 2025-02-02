@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.ops import nms
 
 
 class AconC(nn.Module):
@@ -68,13 +69,6 @@ class StemBlock(nn.Module):
         out = self.concat_conv(concatenated)
         return out
 
-# Example usage
-in_channels = 3
-out_channels = 64
-stem_block = StemBlock(in_channels, out_channels)
-input_tensor = torch.randn(1, in_channels, 224, 224)
-output_tensor = stem_block(input_tensor)
-print(output_tensor.shape)  # Should be (1, out_channels, 56, 56)
 
 class DBAModule(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -90,17 +84,6 @@ class DBAModule(nn.Module):
         return x
 
 
-# Create a DBA module with 64 input channels and 128 output channels
-dba_module = DBAModule(in_channels=64, out_channels=128)
-
-# Create a random input tensor with shape (batch_size, channels, height, width)
-input_tensor = torch.randn(16, 64, 32, 32)
-
-# Forward pass through the DBA module
-output_tensor = dba_module(input_tensor)
-
-print("Input shape:", input_tensor.shape)
-print("Output shape:", output_tensor.shape)
 
 def channel_shuffle(x, groups):
     batchsize, num_channels, height, width = x.size()
@@ -117,10 +100,8 @@ def channel_shuffle(x, groups):
 
     return x
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import init
+
+
 
 
 class GAM_Attention(nn.Module):
@@ -283,32 +264,6 @@ class DWASFFV5(nn.Module):
             return out
 
 
-# Create an instance of DWASFFV5
-level = 1  # Choose the level (0, 1, or 2)
-multiplier = 1  # Choose the multiplier (1 or 0.5)
-model = DWASFFV5(level=level, multiplier=multiplier)
-
-# Prepare input tensors
-# Example shapes: (batch_size, channels, height, width)
-batch_size = 1
-channels_l = int(1024 * multiplier)  # Level 0
-channels_m = int(512 * multiplier)   # Level 1
-channels_s = int(256 * multiplier)   # Level 2
-# Prepare input tensors with aligned spatial dimensions
-height, width = 64, 64  # Ensure dimensions are divisible by 4
-x_level_0 = torch.randn(batch_size, channels_l, height // 2, width // 2)  # Large feature map
-x_level_1 = torch.randn(batch_size, channels_m, height, width)           # Medium feature map
-x_level_2 = torch.randn(batch_size, channels_s, height * 2, width * 2)   # Small feature map
-
-# Combine inputs into a list
-x = [x_level_2, x_level_1, x_level_0]  # Order: small, medium, large
-
-# Pass inputs through the model
-output = model(x)
-
-# Check the output
-print("Output shape:", output.shape)
-
 # Ref - https://em-1001.github.io/computer%20vision/SCYLLA-IoU/ 
 
 def intersection_over_union(boxes_preds, boxes_labels, box_format="midpoint", iou_mode="SIoU", eps=1e-7):
@@ -396,6 +351,7 @@ def intersection_over_union(boxes_preds, boxes_labels, box_format="midpoint", io
     else:
         return iou
 
+# BACKBONE
 class StemBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(StemBlock, self).__init__()
@@ -506,13 +462,8 @@ class SMobileNet(nn.Module):
         x = self.neck5(x)
         x = self.neck6(x)
         return x
-
-model = SMobileNet()
-input_tensor = torch.randn(1, 3, 640, 640)  # Batch of 1 image with 3 channels and 640x640 resolution
-output = model(input_tensor)
-print(output.shape) 
-
-
+    
+# NECK
 class UpSample(nn.Module):
     def __init__(self, in_channels, scale_factor=2):
         super(UpSample, self).__init__()
@@ -527,9 +478,9 @@ class Neck(nn.Module):
 
         # Define DBA blocks (5 times each)
         self.dba1 = nn.Sequential(*[DBAModule(in_channels, out_channels) for _ in range(5)])
-        self.dba2 = DBAModule(out_channels, out_channels)
-        self.dba3 = DBAModule(out_channels, out_channels)
-
+        
+        self.dba2 = DBAModule(in_channels, out_channels)
+        self.dba3 = DBAModule(in_channels, out_channels)
         # Upsampling layers
         self.upsample1 = UpSample(out_channels)
         self.upsample2 = UpSample(out_channels)
@@ -548,35 +499,98 @@ class Neck(nn.Module):
         # Process each path
         x1 = self.dba1(x1)
 
+        # Process x2 with upsampling and dba1
         x2 = self.dba2(x2)
-        x2_up = self.upsample1(x2)
-        x2_concat = torch.cat([x1, x2_up], dim=1)  # Concatenate with x1
-        x2_out = self.dba_final1(x2_concat)
+        x2 = self.upsample1(x2)
+        xn1 = self.neck1(xn1)
+        x2 = torch.cat([x1, x2], dim=1)  # Concatenate with x1
+        x2 = torch.cat([x2, xn1], dim=1)
+        x2 = self.dba_final1(x2)
 
+        # Process x3 with upsampling and dba2
         x3 = self.dba3(x3)
-        x3_up = self.upsample2(x3)
-        x3_concat = torch.cat([x2_out, x3_up], dim=1)  # Concatenate with x2_out
-        x3_out = self.dba_final2(x3_concat)
+        x3 = self.upsample2(x3)
+        xn2 = self.neck1(xn2)
+        x3 = torch.cat([x2, x3], dim=1)  # Concatenate with x2
+        x3 = torch.cat([x3, xn2], dim=1)
+        x3_out = self.dba_final2(x3)
 
-        return x1, x2_out, x3_out  # Three output feature maps
+        return x1, x2, x3_out  # Three output feature maps
 
-batch_size = 1
-in_channels = 128  # Ensure this matches DBAModule expectations
-out_channels = 128
-height, width = 64, 64  # Highest resolution feature map size
+# PREDICTION
 
-x1 = torch.randn(batch_size, in_channels, height, width)        # High-resolution feature map
-x2 = torch.randn(batch_size, in_channels, height//2, width//2)  # Mid-resolution feature map
-x3 = torch.randn(batch_size, in_channels, height//4, width//4)  # Low-resolution feature map
+class PredictionModule(nn.Module):
+    def __init__(self, out_channels_fuse, out_channels_dba, multiplier=1):
+        """
+        Args:
+            out_channels_fuse (int): Number of channels output from the DWASFFV5 (fuse) branch.
+                This is the value that DBAModule expects as input.
+            out_channels_dba (int): Number of output channels from each DBAModule.
+            multiplier (float): Channel multiplier for DWASFFV5 (if applicable).
+        """
+        super(PredictionModule, self).__init__()
+        self.fusion1 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba1    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
+        
+        self.fusion2 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba2    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
+        
+        self.fusion3 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba3    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
 
-# Initialize the Neck model
-neck = Neck(in_channels, out_channels)
 
-# Forward pass
-output_x1, output_x2, output_x3 = neck(x1, x2, x3)
 
-# Print output shapes
-print("Output Shapes:")
-print("x1_out:", output_x1.shape) 
-print("x2_out:", output_x2.shape) 
-print("x3_out:", output_x3.shape) 
+def non_max_suppression(predictions, conf_threshold=0.5, iou_threshold=0.4):
+    """
+    Performs non-maximum suppression (NMS) on inference results
+
+    Args:
+        predictions (torch.Tensor): Tensor of shape (num_detections, 6) where each row contains
+                                    [x1, y1, x2, y2, confidence, class_id].
+        conf_threshold (float): Confidence threshold to filter detections.
+        iou_threshold (float): IoU threshold for NMS.
+        
+    Returns:
+        torch.Tensor: Detections after NMS. Each row has the format
+                      [x1, y1, x2, y2, confidence, class_id].
+    """
+    # Ensure predictions are on the same device
+    device = predictions.device
+
+    # Filter out predictions with low confidence
+    mask = predictions[:, 4] >= conf_threshold
+    predictions = predictions[mask]
+    
+    if predictions.size(0) == 0:
+        return torch.empty((0, 6), device=device)
+    
+    # This will hold the final detections after NMS for all classes
+    final_detections = []
+
+    # Get the unique class ids present in the predictions
+    unique_labels = predictions[:, 5].unique()
+
+    for cls in unique_labels:
+        # Get detections for the current class
+        cls_mask = predictions[:, 5] == cls
+        cls_preds = predictions[cls_mask]
+
+        # Boxes for NMS: shape (N, 4)
+        boxes = cls_preds[:, :4]
+        # Scores for NMS: shape (N,)
+        scores = cls_preds[:, 4]
+
+        # Perform NMS for the current class
+        keep_indices = nms(boxes, scores, iou_threshold)
+        final_detections.append(cls_preds[keep_indices])
+
+    # Concatenate all detections from all classes
+    if final_detections:
+        final_detections = torch.cat(final_detections, dim=0)
+    else:
+        final_detections = torch.empty((0, 6), device=device)
+
+    # Optionally, you can sort the final detections by confidence score (highest first)
+    final_detections = final_detections[final_detections[:, 4].argsort(descending=True)]
+
+    return final_detections
