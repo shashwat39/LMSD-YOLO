@@ -519,27 +519,6 @@ class Neck(nn.Module):
 
 # PREDICTION
 
-class PredictionModule(nn.Module):
-    def __init__(self, out_channels_fuse, out_channels_dba, multiplier=1):
-        """
-        Args:
-            out_channels_fuse (int): Number of channels output from the DWASFFV5 (fuse) branch.
-                This is the value that DBAModule expects as input.
-            out_channels_dba (int): Number of output channels from each DBAModule.
-            multiplier (float): Channel multiplier for DWASFFV5 (if applicable).
-        """
-        super(PredictionModule, self).__init__()
-        self.fusion1 = DWASFFV5(level=1, multiplier=multiplier)
-        self.dba1    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
-        
-        self.fusion2 = DWASFFV5(level=1, multiplier=multiplier)
-        self.dba2    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
-        
-        self.fusion3 = DWASFFV5(level=1, multiplier=multiplier)
-        self.dba3    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
-
-
-
 def non_max_suppression(predictions, conf_threshold=0.5, iou_threshold=0.4):
     """
     Performs non-maximum suppression (NMS) on inference results
@@ -594,3 +573,44 @@ def non_max_suppression(predictions, conf_threshold=0.5, iou_threshold=0.4):
     final_detections = final_detections[final_detections[:, 4].argsort(descending=True)]
 
     return final_detections
+
+
+class PredictionModule(nn.Module):
+    def __init__(self, out_channels_fuse, out_channels_dba, multiplier=1):
+        """
+        Args:
+            out_channels_fuse (int): Number of channels output from the DWASFFV5 (fuse) branch.
+                This is the value that DBAModule expects as input.
+            out_channels_dba (int): Number of output channels from each DBAModule.
+            multiplier (float): Channel multiplier for DWASFFV5 (if applicable).
+        """
+        super(PredictionModule, self).__init__()
+        self.fusion1 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba1    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
+        
+        self.fusion2 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba2    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
+        
+        self.fusion3 = DWASFFV5(level=1, multiplier=multiplier)
+        self.dba3    = DBAModule(in_channels=out_channels_fuse, out_channels=out_channels_dba)
+
+    def forward(self, x):
+        # Process the input through the first fusion and DBA
+        x1 = self.fusion1(x)
+        x1 = self.dba1(x1)
+
+        # Process the input through the second fusion and DBA
+        x2 = self.fusion2(x)
+        x2 = self.dba2(x2)
+
+        # Process the input through the third fusion and DBA
+        x3 = self.fusion3(x)
+        x3 = self.dba3(x3)
+
+        # Combine the outputs from all three branches
+        combined_output = torch.cat([x1, x2, x3], dim=1)
+
+        # Apply NMS on the combined output
+        final_predictions = non_max_suppression(combined_output)
+
+        return final_predictions
